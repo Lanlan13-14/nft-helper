@@ -278,7 +278,7 @@ add_rule() {
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: [Local] $listen_ip:$listen_port -> [Remote] $remote_ip:$remote_port"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -518,7 +518,7 @@ quick_edit_rule() {
 
     echo -e "${GREEN}规则修改成功！${PLAIN}"
     echo -e "新规则: $new_l_ip:$new_l_port -> $new_r_ip:$new_r_port"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -529,7 +529,7 @@ edit_rule_nano() {
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -551,7 +551,7 @@ edit_rule_vim() {
     sleep 3
     vim -n "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -650,7 +650,7 @@ delete_rule() {
     sed -i "${target_line_num}d" "$CONFIG_FILE"
     
     echo -e "${GREEN}规则 $choice 已删除。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -793,7 +793,7 @@ main_menu() {
     echo -e "################################################"
     echo -e " 1. 安装 / 重置 Nftables 配置"
     echo -e " 2. 添加单端口转发规则"
-    echo -e " 3. 添加端口段转发规则 (1:1映射)"
+    echo -e " 3. 添加端口段转发规则"
     echo -e " 4. 查看现有转发规则"
     echo -e " 5. 快速修改转发规则 (向导)"
     echo -e " 6. 修改配置文件 (选择编辑器)"
