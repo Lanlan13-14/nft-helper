@@ -45,8 +45,8 @@ check_dependencies() {
 
     if [ "$IS_ALPINE" -eq 0 ]; then
         # Debian/Ubuntu
-        if ! command -v curl &> /dev/null || ! command -v nano &> /dev/null || ! command -v grep &> /dev/null; then
-            apt-get update && apt-get install -y curl nano grep
+        if ! command -v curl &> /dev/null || ! command -v nano &> /dev/null || ! command -v vim &> /dev/null || ! command -v grep &> /dev/null; then
+            apt-get update && apt-get install -y curl nano vim grep
         fi
     else
         # Alpine
@@ -55,6 +55,9 @@ check_dependencies() {
         fi
         if ! command -v nano &> /dev/null; then
             apk add nano
+        fi
+        if ! command -v vim &> /dev/null; then
+            apk add vim
         fi
     fi
 }
@@ -110,6 +113,56 @@ wait_for_key() {
     echo -e "${YELLOW}按下任意键返回主菜单...${PLAIN}"
     read -n 1 -s -r
     main_menu
+}
+
+# 验证端口范围
+validate_port_range() {
+    local start=$1
+    local end=$2
+    local name=$3
+    
+    if [[ ! "$start" =~ ^[0-9]+$ ]] || [[ ! "$end" =~ ^[0-9]+$ ]]; then
+        echo -e "${RED}错误：端口必须是数字。${PLAIN}"
+        return 1
+    fi
+    
+    if [ "$start" -lt 1 ] || [ "$start" -gt 65535 ] || [ "$end" -lt 1 ] || [ "$end" -gt 65535 ]; then
+        echo -e "${RED}错误：端口范围必须在 1-65535 之间。${PLAIN}"
+        return 1
+    fi
+    
+    if [ "$start" -gt "$end" ]; then
+        echo -e "${RED}错误：起始端口不能大于结束端口。${PLAIN}"
+        return 1
+    fi
+    
+    return 0
+}
+
+# 检查端口范围是否已存在
+check_port_range_exists() {
+    local start=$1
+    local end=$2
+    
+    # 检查是否有任何规则使用了这个范围内的端口
+    while read -r line; do
+        if echo "$line" | grep -q "dport"; then
+            # 尝试匹配单端口
+            local single_port=$(echo "$line" | grep -oP 'dport \K\d+')
+            if [[ -n "$single_port" ]] && [ "$single_port" -ge "$start" ] && [ "$single_port" -le "$end" ]; then
+                return 1
+            fi
+            
+            # 尝试匹配端口范围
+            local range=$(echo "$line" | grep -oP 'dport \{\K[0-9,-]+\}')
+            if [[ -n "$range" ]]; then
+                # 简单的范围重叠检查
+                return 1
+            fi
+        fi
+    done < <(grep "dnat to" "$CONFIG_FILE")
+    
+    return 0
 }
 
 # 安装或更新 Nftables
@@ -169,10 +222,10 @@ EOF
     fi
 }
 
-# 添加转发规则
+# 添加单端口转发规则
 add_rule() {
     init_config
-    echo -e "${YELLOW}=== 添加转发规则 (TCP+UDP) ===${PLAIN}"
+    echo -e "${YELLOW}=== 添加单端口转发规则 (TCP+UDP) ===${PLAIN}"
     
     read -p "请输入监听 IP (默认 0.0.0.0, 回车即可): " listen_ip
     
@@ -183,21 +236,36 @@ add_rule() {
         return
     fi
 
+    if [[ ! "$listen_port" =~ ^[0-9]+$ ]] || [ "$listen_port" -lt 1 ] || [ "$listen_port" -gt 65535 ]; then
+        echo -e "${RED}错误：端口必须是 1-65535 之间的数字。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
     if grep -q "dport $listen_port dnat" "$CONFIG_FILE"; then
         echo -e "${RED}错误：该端口已在配置文件中存在。${PLAIN}"
-        exit 1
+        wait_for_key
+        return
     fi
 
     read -p "请输入转发目标 IP (必填): " remote_ip
     if [[ -z "$remote_ip" ]]; then
         echo -e "${RED}错误：目标 IP 不能为空。${PLAIN}"
-        exit 1
+        wait_for_key
+        return
     fi
 
     read -p "请输入转发目标端口 (必填): " remote_port
     if [[ -z "$remote_port" ]]; then
         echo -e "${RED}错误：目标端口 不能为空。${PLAIN}"
-        exit 1
+        wait_for_key
+        return
+    fi
+    
+    if [[ ! "$remote_port" =~ ^[0-9]+$ ]] || [ "$remote_port" -lt 1 ] || [ "$remote_port" -gt 65535 ]; then
+        echo -e "${RED}错误：目标端口必须是 1-65535 之间的数字。${PLAIN}"
+        wait_for_key
+        return
     fi
 
     if [[ -n "$listen_ip" && "$listen_ip" != "0.0.0.0" ]]; then
@@ -210,6 +278,78 @@ add_rule() {
 
     echo -e "${GREEN}规则添加成功！${PLAIN}"
     echo -e "已添加: [Local] $listen_ip:$listen_port -> [Remote] $remote_ip:$remote_port"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
+    wait_for_key
+}
+
+# 添加端口段转发规则
+add_range_rule() {
+    init_config
+    echo -e "${YELLOW}=== 添加端口段转发规则 (TCP+UDP) ===${PLAIN}"
+    echo -e "${YELLOW}说明：将本地端口段 1:1 转发到目标服务器的相同端口段${PLAIN}"
+    
+    read -p "请输入监听 IP (默认 0.0.0.0, 回车即可): " listen_ip
+    
+    read -p "请输入起始监听端口 (必填): " port_start
+    if [[ -z "$port_start" ]]; then
+        echo -e "${RED}错误：起始端口不能为空。${PLAIN}"
+        wait_for_key
+        return
+    fi
+    
+    read -p "请输入结束监听端口 (必填): " port_end
+    if [[ -z "$port_end" ]]; then
+        echo -e "${RED}错误：结束端口不能为空。${PLAIN}"
+        wait_for_key
+        return
+    fi
+    
+    # 验证端口范围
+    if ! validate_port_range "$port_start" "$port_end" "监听"; then
+        wait_for_key
+        return
+    fi
+    
+    # 检查端口范围是否已存在
+    if ! check_port_range_exists "$port_start" "$port_end"; then
+        echo -e "${RED}错误：该端口范围内已有规则存在。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    read -p "请输入转发目标 IP (必填): " remote_ip
+    if [[ -z "$remote_ip" ]]; then
+        echo -e "${RED}错误：目标 IP 不能为空。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    # 确认信息
+    echo -e "\n${YELLOW}请确认以下信息：${PLAIN}"
+    echo -e "监听 IP: ${GREEN}${listen_ip:-0.0.0.0}${PLAIN}"
+    echo -e "监听端口范围: ${GREEN}$port_start - $port_end${PLAIN}"
+    echo -e "目标 IP: ${GREEN}$remote_ip${PLAIN}"
+    echo -e "目标端口范围: ${GREEN}$port_start - $port_end (1:1映射)${PLAIN}"
+    
+    read -p "确认添加？[y/n] (默认 y): " confirm
+    if [[ "$confirm" == "n" || "$confirm" == "N" ]]; then
+        echo -e "${YELLOW}已取消添加。${PLAIN}"
+        wait_for_key
+        return
+    fi
+
+    # 构建规则
+    # 对于端口段转发，使用 nftables 的集合语法 {start-end}
+    if [[ -n "$listen_ip" && "$listen_ip" != "0.0.0.0" ]]; then
+        RULE_STR="        ip daddr $listen_ip meta l4proto {tcp, udp} th dport { $port_start-$port_end } dnat to $remote_ip"
+    else
+        RULE_STR="        meta l4proto {tcp, udp} th dport { $port_start-$port_end } dnat to $remote_ip"
+    fi
+
+    sed -i "/# MARKER_END/i \\$RULE_STR" "$CONFIG_FILE"
+
+    echo -e "${GREEN}端口段规则添加成功！${PLAIN}"
+    echo -e "已添加: [Local] ${listen_ip:-0.0.0.0}:$port_start-$port_end -> [Remote] $remote_ip:$port_start-$port_end (1:1映射)"
     echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
 }
@@ -223,24 +363,48 @@ view_rules() {
     fi
 
     echo -e "${YELLOW}=== 现有转发规则 ===${PLAIN}"
-    echo -e "格式: [监听IP]:监听端口 -> 目标IP:目标端口"
+    echo -e "格式: [监听IP]:监听端口(范围) -> 目标IP:目标端口(范围)"
     echo "--------------------------------"
     
-    grep "dnat to" "$CONFIG_FILE" | while read -r line; do
-        l_port=$(echo "$line" | grep -oP 'dport \K\d+')
-        r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
-        l_ip="0.0.0.0"
-        
-        if echo "$line" | grep -q "ip daddr"; then
-            l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+    local rule_count=0
+    while read -r line; do
+        # 匹配单端口规则
+        if echo "$line" | grep -q "dport [0-9]\+ dnat to"; then
+            l_port=$(echo "$line" | grep -oP 'dport \K\d+')
+            r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
+            l_ip="0.0.0.0"
+            
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            
+            if [[ -n "$l_port" && -n "$r_addr" ]]; then
+                echo "$l_ip:$l_port -> $r_addr"
+                ((rule_count++))
+            fi
+        # 匹配端口段规则
+        elif echo "$line" | grep -q "dport { [0-9]\+-[0-9]\+ } dnat to"; then
+            l_range=$(echo "$line" | grep -oP 'dport { \K[0-9]+-[0-9]+')
+            r_ip=$(echo "$line" | grep -oP 'dnat to \K[0-9.]+')
+            l_ip="0.0.0.0"
+            
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            
+            if [[ -n "$l_range" && -n "$r_ip" ]]; then
+                echo "$l_ip:$l_range -> $r_ip:$l_range (1:1映射)"
+                ((rule_count++))
+            fi
         fi
-        
-        if [[ -n "$l_port" && -n "$r_addr" ]]; then
-            echo "$l_ip:$l_port -> $r_addr"
-        fi
-    done
+    done < <(grep "dnat to" "$CONFIG_FILE")
+    
+    if [ $rule_count -eq 0 ]; then
+        echo -e "${YELLOW}暂无转发规则。${PLAIN}"
+    fi
     
     echo "--------------------------------"
+    echo -e "总计: ${GREEN}$rule_count${PLAIN} 条规则"
     wait_for_key
 }
 
@@ -254,7 +418,8 @@ quick_edit_rule() {
 
     echo -e "${YELLOW}=== 快速修改转发规则 ===${PLAIN}"
     
-    line_numbers=($(grep -n "dnat to" "$CONFIG_FILE" | cut -d: -f1))
+    # 收集所有规则行号
+    mapfile -t line_numbers < <(grep -n "dnat to" "$CONFIG_FILE" | cut -d: -f1)
     total=${#line_numbers[@]}
 
     if [ $total -eq 0 ]; then
@@ -267,16 +432,31 @@ quick_edit_rule() {
     local i=1
     for ln in "${line_numbers[@]}"; do
         line=$(sed -n "${ln}p" "$CONFIG_FILE")
-        l_port=$(echo "$line" | grep -oP 'dport \K\d+')
-        r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
-        l_ip="0.0.0.0"
-        if echo "$line" | grep -q "ip daddr"; then
-            l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
-        fi
         
-        echo -e "${GREEN}$i.${PLAIN} $l_ip:$l_port -> $r_addr"
+        # 判断是单端口还是端口段规则
+        if echo "$line" | grep -q "dport { [0-9]\+-[0-9]\+ }"; then
+            # 端口段规则
+            l_range=$(echo "$line" | grep -oP 'dport { \K[0-9]+-[0-9]+')
+            r_ip=$(echo "$line" | grep -oP 'dnat to \K[0-9.]+')
+            l_ip="0.0.0.0"
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            echo -e "${GREEN}$i.${PLAIN} [端口段] $l_ip:$l_range -> $r_ip:$l_range (1:1映射)"
+        else
+            # 单端口规则
+            l_port=$(echo "$line" | grep -oP 'dport \K\d+')
+            r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
+            l_ip="0.0.0.0"
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            echo -e "${GREEN}$i.${PLAIN} [单端口] $l_ip:$l_port -> $r_addr"
+        fi
         ((i++))
     done
+    echo -e "--------------------------------"
+    echo -e "${YELLOW}注意：端口段规则暂不支持向导修改，请使用编辑器手动修改。${PLAIN}"
     echo -e "--------------------------------"
 
     read -p "请输入要修改的规则序号 (输入 0 取消): " choice
@@ -297,6 +477,14 @@ quick_edit_rule() {
     target_line_num=${line_numbers[$idx]}
     line_content=$(sed -n "${target_line_num}p" "$CONFIG_FILE")
     
+    # 检查是否为端口段规则
+    if echo "$line_content" | grep -q "dport { [0-9]\+-[0-9]\+ }"; then
+        echo -e "${RED}端口段规则不支持向导修改，请使用编辑器手动修改。${PLAIN}"
+        wait_for_key
+        return
+    fi
+    
+    # 原有的单端口修改逻辑
     old_l_port=$(echo "$line_content" | grep -oP 'dport \K\d+')
     old_full_remote=$(echo "$line_content" | grep -oP 'dnat to \K[0-9.:]+')
     old_r_port=$(echo "$old_full_remote" | rev | cut -d: -f1 | rev)
@@ -330,19 +518,57 @@ quick_edit_rule() {
 
     echo -e "${GREEN}规则修改成功！${PLAIN}"
     echo -e "新规则: $new_l_ip:$new_l_port -> $new_r_ip:$new_r_port"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
 # 修改现有转发规则 (nano)
 edit_rule_nano() {
-    echo -e "${GREEN}正在打开配置文件...${PLAIN}"
+    echo -e "${GREEN}正在打开配置文件 (使用 nano)...${PLAIN}"
     echo -e "${YELLOW}提示：Nftables 语法严格，请确保保留 chain prerouting 和 chain postrouting 结构。${PLAIN}"
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
+}
+
+# 修改现有转发规则 (vim)
+edit_rule_vim() {
+    # 确保 vim 已安装
+    if ! command -v vim &> /dev/null; then
+        echo -e "${YELLOW}检测到系统未安装 vim，正在自动安装...${PLAIN}"
+        if [ "$IS_ALPINE" -eq 1 ]; then
+            apk add vim
+        else
+            apt-get update && apt-get install -y vim
+        fi
+    fi
+    
+    echo -e "${GREEN}正在打开配置文件 (使用 vim)...${PLAIN}"
+    echo -e "${YELLOW}提示：Nftables 语法严格，请确保保留 chain prerouting 和 chain postrouting 结构。${PLAIN}"
+    echo -e "${YELLOW}vim 基础操作: i 进入编辑模式, Esc 退出编辑模式, :wq 保存退出, :q! 不保存退出${PLAIN}"
+    sleep 3
+    vim -n "$CONFIG_FILE"
+    echo -e "${GREEN}修改完成。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
+    wait_for_key
+}
+
+# 选择编辑器修改配置文件
+choose_editor() {
+    echo -e "${YELLOW}=== 选择编辑器 ===${PLAIN}"
+    echo -e " 1. 使用 nano 编辑 (简单易用)"
+    echo -e " 2. 使用 vim 编辑 (功能强大)"
+    echo -e " 0. 返回主菜单"
+    read -p "请输入数字: " editor_choice
+    
+    case "$editor_choice" in
+        1) edit_rule_nano ;;
+        2) edit_rule_vim ;;
+        0) main_menu ;;
+        *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; choose_editor ;;
+    esac
 }
 
 # 删除转发规则
@@ -368,14 +594,27 @@ delete_rule() {
     local i=1
     for ln in "${line_numbers[@]}"; do
         line=$(sed -n "${ln}p" "$CONFIG_FILE")
-        l_port=$(echo "$line" | grep -oP 'dport \K\d+')
-        r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
-        l_ip="0.0.0.0"
-        if echo "$line" | grep -q "ip daddr"; then
-            l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
-        fi
         
-        echo -e "${GREEN}$i.${PLAIN} $l_ip:$l_port -> $r_addr"
+        # 判断是单端口还是端口段规则
+        if echo "$line" | grep -q "dport { [0-9]\+-[0-9]\+ }"; then
+            # 端口段规则
+            l_range=$(echo "$line" | grep -oP 'dport { \K[0-9]+-[0-9]+')
+            r_ip=$(echo "$line" | grep -oP 'dnat to \K[0-9.]+')
+            l_ip="0.0.0.0"
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            echo -e "${GREEN}$i.${PLAIN} [端口段] $l_ip:$l_range -> $r_ip:$l_range (1:1映射)"
+        else
+            # 单端口规则
+            l_port=$(echo "$line" | grep -oP 'dport \K\d+')
+            r_addr=$(echo "$line" | grep -oP 'dnat to \K[0-9.:]+')
+            l_ip="0.0.0.0"
+            if echo "$line" | grep -q "ip daddr"; then
+                l_ip=$(echo "$line" | grep -oP 'ip daddr \K[0-9.]+')
+            fi
+            echo -e "${GREEN}$i.${PLAIN} [单端口] $l_ip:$l_port -> $r_addr"
+        fi
         ((i++))
     done
 
@@ -397,10 +636,21 @@ delete_rule() {
     idx=$((choice - 1))
     target_line_num=${line_numbers[$idx]}
     
+    # 显示将要删除的规则
+    echo -e "${YELLOW}即将删除规则:${PLAIN}"
+    sed -n "${target_line_num}p" "$CONFIG_FILE"
+    read -p "确认删除？[y/n] (默认 y): " confirm
+    
+    if [[ "$confirm" == "n" || "$confirm" == "N" ]]; then
+        echo -e "${YELLOW}已取消删除。${PLAIN}"
+        wait_for_key
+        return
+    fi
+    
     sed -i "${target_line_num}d" "$CONFIG_FILE"
     
     echo -e "${GREEN}规则 $choice 已删除。${PLAIN}"
-    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 12) 使配置生效。${PLAIN}"
     wait_for_key
 }
 
@@ -432,7 +682,6 @@ manage_service() {
                 echo -e "${GREEN}服务已停止。${PLAIN}"
                 ;;
             restart)
-                # Nftables 推荐使用 reload 重新加载配置，但也支持 restart
                 rc-service nftables restart
                 echo -e "${GREEN}服务已重启并加载新配置。${PLAIN}"
                 ;;
@@ -543,20 +792,21 @@ main_menu() {
     echo -e "提示: 输入 nft-helper 可快速启动本脚本"
     echo -e "################################################"
     echo -e " 1. 安装 / 重置 Nftables 配置"
-    echo -e " 2. 添加转发规则"
-    echo -e " 3. 查看现有转发规则"
-    echo -e " 4. 快速修改转发规则 (向导)"
-    echo -e " 5. 修改配置文件 (nano)"
-    echo -e " 6. 删除转发规则"
+    echo -e " 2. 添加单端口转发规则"
+    echo -e " 3. 添加端口段转发规则"
+    echo -e " 4. 查看现有转发规则"
+    echo -e " 5. 快速修改转发规则 (向导)"
+    echo -e " 6. 修改配置文件 (选择编辑器)"
+    echo -e " 7. 删除转发规则"
     echo -e "------------------------------------------------"
-    echo -e " 7. 设置开机自启 (enable)"
-    echo -e " 8. 取消开机自启 (disable)"
-    echo -e " 9. 启动服务 (start)"
-    echo -e " 10. 停止服务 (stop)"
-    echo -e " 11. 重启服务 (restart - 应用配置)"
+    echo -e " 8. 设置开机自启 (enable)"
+    echo -e " 9. 取消开机自启 (disable)"
+    echo -e "10. 启动服务 (start)"
+    echo -e "11. 停止服务 (stop)"
+    echo -e "12. 重启服务 (restart - 应用配置)"
     echo -e "------------------------------------------------"
-    echo -e " 12. 清空所有规则 (重置配置)"
-    echo -e " 99. 更新本脚本"
+    echo -e "13. 清空所有规则 (重置配置)"
+    echo -e "99. 更新本脚本"
     echo -e " 0. 退出脚本"
     echo -e "################################################"
     read -p "请输入数字: " num
@@ -564,16 +814,17 @@ main_menu() {
     case "$num" in
         1) install_nftables ;;
         2) add_rule ;;
-        3) view_rules ;;
-        4) quick_edit_rule ;;
-        5) edit_rule_nano ;;
-        6) delete_rule ;;
-        7) manage_service enable ;;
-        8) manage_service disable ;;
-        9) manage_service start ;;
-        10) manage_service stop ;;
-        11) manage_service restart ;;
-        12) clear_config ;;
+        3) add_range_rule ;;
+        4) view_rules ;;
+        5) quick_edit_rule ;;
+        6) choose_editor ;;
+        7) delete_rule ;;
+        8) manage_service enable ;;
+        9) manage_service disable ;;
+        10) manage_service start ;;
+        11) manage_service stop ;;
+        12) manage_service restart ;;
+        13) clear_config ;;
         99) update_script ;;
         0) echo -e "${GREEN}谢谢使用本脚本，再见。${PLAIN}"; exit 0 ;;
         *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; main_menu ;;
