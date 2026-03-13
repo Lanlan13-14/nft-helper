@@ -364,7 +364,7 @@ edit_rule_vim() {
     echo -e "${YELLOW}提示：Nftables 语法严格，请确保保留 chain prerouting 和 chain postrouting 结构。${PLAIN}"
     echo -e "${YELLOW}vim 基础操作: i 进入编辑模式, Esc 退出编辑模式, :wq 保存退出, :q! 不保存退出${PLAIN}"
     sleep 3
-    vim "$CONFIG_FILE"
+    vim -n "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
     echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
