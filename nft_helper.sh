@@ -45,8 +45,8 @@ check_dependencies() {
 
     if [ "$IS_ALPINE" -eq 0 ]; then
         # Debian/Ubuntu
-        if ! command -v curl &> /dev/null || ! command -v nano &> /dev/null || ! command -v grep &> /dev/null; then
-            apt-get update && apt-get install -y curl nano grep
+        if ! command -v curl &> /dev/null || ! command -v nano &> /dev/null || ! command -v vim &> /dev/null || ! command -v grep &> /dev/null; then
+            apt-get update && apt-get install -y curl nano vim grep
         fi
     else
         # Alpine
@@ -55,6 +55,9 @@ check_dependencies() {
         fi
         if ! command -v nano &> /dev/null; then
             apk add nano
+        fi
+        if ! command -v vim &> /dev/null; then
+            apk add vim
         fi
     fi
 }
@@ -336,13 +339,51 @@ quick_edit_rule() {
 
 # 修改现有转发规则 (nano)
 edit_rule_nano() {
-    echo -e "${GREEN}正在打开配置文件...${PLAIN}"
+    echo -e "${GREEN}正在打开配置文件 (使用 nano)...${PLAIN}"
     echo -e "${YELLOW}提示：Nftables 语法严格，请确保保留 chain prerouting 和 chain postrouting 结构。${PLAIN}"
     sleep 2
     nano "$CONFIG_FILE"
     echo -e "${GREEN}修改完成。${PLAIN}"
     echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
     wait_for_key
+}
+
+# 修改现有转发规则 (vim)
+edit_rule_vim() {
+    # 确保 vim 已安装
+    if ! command -v vim &> /dev/null; then
+        echo -e "${YELLOW}检测到系统未安装 vim，正在自动安装...${PLAIN}"
+        if [ "$IS_ALPINE" -eq 1 ]; then
+            apk add vim
+        else
+            apt-get update && apt-get install -y vim
+        fi
+    fi
+    
+    echo -e "${GREEN}正在打开配置文件 (使用 vim)...${PLAIN}"
+    echo -e "${YELLOW}提示：Nftables 语法严格，请确保保留 chain prerouting 和 chain postrouting 结构。${PLAIN}"
+    echo -e "${YELLOW}vim 基础操作: i 进入编辑模式, Esc 退出编辑模式, :wq 保存退出, :q! 不保存退出${PLAIN}"
+    sleep 3
+    vim "$CONFIG_FILE"
+    echo -e "${GREEN}修改完成。${PLAIN}"
+    echo -e "${YELLOW}注意：请重启服务 (选项 11) 使配置生效。${PLAIN}"
+    wait_for_key
+}
+
+# 选择编辑器修改配置文件
+choose_editor() {
+    echo -e "${YELLOW}=== 选择编辑器 ===${PLAIN}"
+    echo -e " 1. 使用 nano 编辑 (简单易用)"
+    echo -e " 2. 使用 vim 编辑 (功能强大)"
+    echo -e " 0. 返回主菜单"
+    read -p "请输入数字: " editor_choice
+    
+    case "$editor_choice" in
+        1) edit_rule_nano ;;
+        2) edit_rule_vim ;;
+        0) main_menu ;;
+        *) echo -e "${RED}请输入正确的数字！${PLAIN}"; sleep 1; choose_editor ;;
+    esac
 }
 
 # 删除转发规则
@@ -546,7 +587,7 @@ main_menu() {
     echo -e " 2. 添加转发规则"
     echo -e " 3. 查看现有转发规则"
     echo -e " 4. 快速修改转发规则 (向导)"
-    echo -e " 5. 修改配置文件 (nano)"
+    echo -e " 5. 修改配置文件 (选择编辑器)"
     echo -e " 6. 删除转发规则"
     echo -e "------------------------------------------------"
     echo -e " 7. 设置开机自启 (enable)"
@@ -566,7 +607,7 @@ main_menu() {
         2) add_rule ;;
         3) view_rules ;;
         4) quick_edit_rule ;;
-        5) edit_rule_nano ;;
+        5) choose_editor ;;
         6) delete_rule ;;
         7) manage_service enable ;;
         8) manage_service disable ;;
